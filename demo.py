@@ -16,6 +16,9 @@ from modules.generator import OcclusionAwareGenerator
 from modules.keypoint_detector import KPDetector
 from animate import normalize_kp
 from scipy.spatial import ConvexHull
+from detect_mtcnn import face_detetect
+import cv2
+from PIL import Image
 
 
 if sys.version_info[0] < 3:
@@ -102,6 +105,47 @@ def find_best_frame(source, driving, cpu=False):
             frame_num = i
     return frame_num
 
+def erosion(image, kernel_size, iterations=1):
+    kernel = np.ones((kernel_size,kernel_size), np.uint8)  
+    img_erosion = cv2.erode(image, kernel, iterations=1)
+    return img_erosion
+
+def dilation(image, kernel_size, iterations=1):
+    kernel = np.ones((kernel_size,kernel_size), np.uint8)  
+    img_dilation = cv2.dilate(image, kernel, iterations=1)
+    return img_dilation
+
+def resize_prediction(prediction,t,b,l,r):
+    predict = (prediction.copy()*255).astype("uint8")
+    resized_res = cv2.resize(predict,(r-l,b-t))
+    return resized_res
+
+def blend_image(face_result, full_result, t,b,l,r):
+    face_result_f = (face_result.astype("float32"))/255
+    full_result_f = (full_result.astype("float32"))/255
+    
+    fore_grd_f = np.zeros_like(full_result_f)
+    fore_grd_f[t:b,l:r] = face_result_f
+    back_grd_f = full_result_f.copy()
+
+    small_mask_f = np.ones_like(face_result_f)
+    mask_f = np.zeros_like(full_result_f)
+    mask_f[t:b, l:r] = small_mask_f
+    mask_f = erosion(mask_f, 35, 2)
+    mask_f = cv2.GaussianBlur(mask_f, (29,29), 0)
+    mask_f = cv2.GaussianBlur(mask_f, (35,35), 0)
+    
+    fore_grd_f = cv2.multiply(mask_f, fore_grd_f)
+    back_grd_f = cv2.multiply(np.ones_like(mask_f) - mask_f, back_grd_f)
+    added_result = cv2.add(fore_grd_f, back_grd_f)
+    added_result = (added_result*255).astype("uint8")
+    return added_result
+
+def post_process(src_image, prediction,t,b,l,r):
+    resize_face = resize_prediction(prediction, t,b,l,r)
+    result = blend_image(resize_face, src_image, t,b,l,r)
+    return result
+
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("--config", required=True, help="path to config")
@@ -127,6 +171,15 @@ if __name__ == "__main__":
     parser.set_defaults(adapt_scale=False)
 
     opt = parser.parse_args()
+    # d = parser.get_default
+    
+    ## Read image
+    # image = imageio.imread(opt.source_image)
+
+    # img_pil = Image.fromarray(image)
+    # aligned_img_pil,l,t,r,b = face_detetect(img_pil,scale=1.3)  #Pil Image, Aligned face
+    # aligned_img = np.array(aligned_img_pil)
+    # source_image = aligned_img.copy()
 
     source_image = imageio.imread(opt.source_image)
     reader = imageio.get_reader(opt.driving_video)
@@ -144,6 +197,7 @@ if __name__ == "__main__":
     generator, kp_detector = load_checkpoints(config_path=opt.config, checkpoint_path=opt.checkpoint, cpu=opt.cpu)
 
     if opt.find_best_frame or opt.best_frame is not None:
+        import pdb; pdb.set_trace()
         i = opt.best_frame if opt.best_frame is not None else find_best_frame(source_image, driving_video, cpu=opt.cpu)
         print ("Best frame: " + str(i))
         driving_forward = driving_video[i:]
@@ -153,5 +207,10 @@ if __name__ == "__main__":
         predictions = predictions_backward[::-1] + predictions_forward[1:]
     else:
         predictions = make_animation(source_image, driving_video, generator, kp_detector, relative=opt.relative, adapt_movement_scale=opt.adapt_scale, cpu=opt.cpu)
-    imageio.mimsave(opt.result_video, [img_as_ubyte(frame) for frame in predictions], fps=fps)
+    # import pdb; pdb.set_trace()
+    post_predictions = [resize(frame, (512, 512))[..., :3] for frame in predictions]
+    # post_predictions = [post_process(image, prediction,t,b,l,r) for prediction in predictions]
+    imageio.mimsave(opt.result_video, [img_as_ubyte(frame) for frame in post_predictions], fps=fps)
 
+## python demo.py --driving_video data/video/wombo.mp4 --source_image data/image/17.jpg --result_video data/res_reen/17_wombo.mp4 --checkpoint pretrain_model/vox-adv-cpk.pth.tar --relative --adapt_scale --config config/vox-adv-256.yaml
+## python crop-video.py --inp /home/nhattruong/Project/FS/fsgan/data/video/test_short.mp4

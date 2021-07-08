@@ -11,3 +11,7 @@ scipy==1.1.0
 torch==1.0.0
 torchvision==0.2.1
 tqdm==4.24.0
+
+opencv-python==4.5.2.54
+facenet-pytorch==2.5.2
+
